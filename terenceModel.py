@@ -3,33 +3,44 @@ from tensorflow.keras import layers, models
 import numpy as np
 
 class FeatureWeightedDNN:
-    def __init__(self, input_dim=4):
+    def __init__(self, input_dim=61):  # 60 minutes + 3 weekly features
         self.input_dim = input_dim
         # Feature importance weights based on our analysis
         self.feature_weights = {
             'weekly_supply': 0.4,      # Most important
-            'pre_release_price': 0.3,   # Second most important
-            'weekly_production': 0.2,   # Third most important
-            'weekly_import': 0.1        # Least important
+            'weekly_production': 0.3,   # Second most important
+            'weekly_import': 0.3        # Third most important
         }
         
     def build_model(self):
-        # Input layer
+        # Input layer for time series data
         inputs = layers.Input(shape=(self.input_dim,))
         
-        # Apply feature weights
-        weighted_inputs = layers.Lambda(
+        # Reshape input to separate time series and weekly features
+        time_series = layers.Lambda(lambda x: x[:, :-3])(inputs)  # Last 60 minutes
+        weekly_features = layers.Lambda(lambda x: x[:, -3:])(inputs)  # 3 weekly features
+        
+        # Process time series with LSTM
+        time_series = layers.Reshape((60, 1))(time_series)
+        time_series = layers.LSTM(32, return_sequences=True)(time_series)
+        time_series = layers.LSTM(16)(time_series)
+        
+        # Process weekly features with feature weights
+        weighted_features = layers.Lambda(
             lambda x: tf.multiply(x, list(self.feature_weights.values()))
-        )(inputs)
+        )(weekly_features)
+        
+        # Combine time series and weekly features
+        combined = layers.Concatenate()([time_series, weighted_features])
         
         # Hidden layers
-        x = layers.Dense(64, activation='relu')(weighted_inputs)
+        x = layers.Dense(64, activation='relu')(combined)
         x = layers.Dropout(0.2)(x)
         x = layers.Dense(32, activation='relu')(x)
         x = layers.Dropout(0.2)(x)
         
-        # Output layer
-        outputs = layers.Dense(1)(x)
+        # Output layer (predicting 2 minutes)
+        outputs = layers.Dense(2)(x)
         
         # Create model
         model = models.Model(inputs=inputs, outputs=outputs)
@@ -43,17 +54,20 @@ class FeatureWeightedDNN:
         
         return model
     
-    def prepare_data(self, weekly_supply, pre_release_price, weekly_production, weekly_import):
+    def prepare_data(self, price_series, weekly_supply, weekly_production, weekly_import):
         """
         Prepare input data with proper feature ordering based on importance
+        price_series: array of shape (n_samples, 60) containing last 60 minutes of prices
         """
-        # Stack features in order of importance
-        X = np.column_stack([
+        # Stack weekly features in order of importance
+        weekly_features = np.column_stack([
             weekly_supply,          # Most important
-            pre_release_price,      # Second most important
-            weekly_production,      # Third most important
-            weekly_import           # Least important
+            weekly_production,      # Second most important
+            weekly_import           # Third most important
         ])
+        
+        # Combine time series and weekly features
+        X = np.column_stack([price_series, weekly_features])
         return X
     
     def train(self, X, y, validation_split=0.2, epochs=100, batch_size=32):

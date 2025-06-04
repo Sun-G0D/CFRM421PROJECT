@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 from terenceModel import FeatureWeightedDNN
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error
+import matplotlib.pyplot as plt
 
 def convert_to_number(value):
     """Convert string with M suffix to float"""
@@ -41,71 +42,138 @@ def load_and_prepare_data():
     net_import_weekly = net_import_weekly[(net_import_weekly['ï»¿Date'] >= start_date) & (net_import_weekly['ï»¿Date'] < end_date)]
     supply_weekly = supply_weekly[(supply_weekly['Release Date'] >= start_date) & (supply_weekly['Release Date'] < end_date)]
     
-    print("\nSupply weekly data:")
-    print(supply_weekly.head())
-    
-    print("\nPrice data:")
-    print(price.head())
-    print("\nNumber of price records:", len(price))
-    
     return prod_weekly, net_import_weekly, supply_weekly, price
 
-def prepare_features(prod_weekly, net_import_weekly, supply_weekly, price):
-    # Extract features
-    weekly_supply = supply_weekly['Actual'].values
-    weekly_production = prod_weekly['US Weekly Production'].values
-    weekly_import = net_import_weekly['Weekly Net Import'].values
+def prepare_walk_forward_data(price, weekly_supply, weekly_production, weekly_import, scaler):
+    """
+    Prepare data for walk-forward validation
+    Returns sequences of 60 minutes for input and 2 minutes for output
+    """
+    # Group price data by release time
+    grouped_prices = price.groupby('Release_Datetime')
     
-    # Scale features
-    scaler = StandardScaler()
-    weekly_supply_scaled = scaler.fit_transform(weekly_supply.reshape(-1, 1)).flatten()
-    weekly_production_scaled = scaler.fit_transform(weekly_production.reshape(-1, 1)).flatten()
-    weekly_import_scaled = scaler.fit_transform(weekly_import.reshape(-1, 1)).flatten()
+    X_sequences = []
+    y_sequences = []
     
-    # Calculate price changes
-    price['price_change'] = price.groupby('report_time')['Close'].diff()
+    for report_time, group in grouped_prices:
+        # Sort by date to ensure correct order
+        group = group.sort_values('Date')
+        
+        # Get the last 60 minutes before release
+        pre_release = group[group['Date'] <= report_time].tail(60)
+        
+        # Get the next 2 minutes after release
+        post_release = group[group['Date'] > report_time].head(2)
+        
+        if len(pre_release) == 60 and len(post_release) == 2:
+            # Scale the price sequences
+            pre_release_scaled = scaler.transform(pre_release['Close'].values.reshape(-1, 1)).flatten()
+            post_release_scaled = scaler.transform(post_release['Close'].values.reshape(-1, 1)).flatten()
+            
+            # Get the corresponding weekly features for this report time
+            report_date = pd.to_datetime(report_time.date())
+            supply_value = weekly_supply[supply_weekly['Release Date'] == report_date][0] if len(weekly_supply[supply_weekly['Release Date'] == report_date]) > 0 else 0
+            production_value = weekly_production[prod_weekly['ï»¿Date'] == report_date][0] if len(weekly_production[prod_weekly['ï»¿Date'] == report_date]) > 0 else 0
+            import_value = weekly_import[net_import_weekly['ï»¿Date'] == report_date][0] if len(weekly_import[net_import_weekly['ï»¿Date'] == report_date]) > 0 else 0
+            
+            # Combine price sequence with weekly features
+            X_sequence = np.concatenate([pre_release_scaled, [supply_value, production_value, import_value]])
+            
+            X_sequences.append(X_sequence)
+            y_sequences.append(post_release_scaled)
     
-    # Get the price 1-2 minutes before release for each report
-    pre_release_prices = []
-    for report_time in price['report_time'].unique():
-        report_prices = price[price['report_time'] == report_time]
-        # Get the price 1-2 minutes before release
-        pre_release_price = report_prices[report_prices['Date'] <= report_time].iloc[-2:]['Close'].mean()
-        pre_release_prices.append(pre_release_price)
+    return np.array(X_sequences), np.array(y_sequences)
+
+def walk_forward_validation(X, y, model, train_size=0.8):
+    """
+    Perform walk-forward validation
+    """
+    n_samples = len(X)
+    train_size = int(n_samples * train_size)
     
-    # Scale pre-release prices
-    pre_release_prices_scaled = scaler.fit_transform(np.array(pre_release_prices).reshape(-1, 1)).flatten()
+    # Initialize lists to store predictions and actual values
+    all_predictions = []
+    all_actuals = []
     
-    # Use the price changes as target variable
-    y = price['price_change'].values
+    # Train initial model on first train_size samples
+    X_train = X[:train_size]
+    y_train = y[:train_size]
     
-    return weekly_supply_scaled, weekly_production_scaled, weekly_import_scaled, pre_release_prices_scaled, y
+    trained_model, _ = model.train(X_train, y_train)
+    
+    # Walk forward
+    for i in range(train_size, n_samples):
+        # Make prediction
+        X_test = X[i:i+1]
+        y_test = y[i:i+1]
+        
+        prediction = model.predict(trained_model, X_test)
+        
+        # Store results
+        all_predictions.append(prediction[0])
+        all_actuals.append(y_test[0])
+    
+        # Update training data and retrain model
+        X_train = np.vstack([X_train, X_test])
+        y_train = np.vstack([y_train, y_test])
+        
+        trained_model, _ = model.train(X_train, y_train)
+    
+    return np.array(all_predictions), np.array(all_actuals)
+
+def plot_predictions(predictions, actuals, scaler):
+    """
+    Plot predictions vs actual values
+    """
+    # Inverse transform the scaled values
+    predictions_original = scaler.inverse_transform(predictions.reshape(-1, 1))
+    actuals_original = scaler.inverse_transform(actuals.reshape(-1, 1))
+    
+    plt.figure(figsize=(12, 6))
+    plt.plot(actuals_original, label='Actual')
+    plt.plot(predictions_original, label='Predicted')
+    plt.title('Walk-Forward Validation: Actual vs Predicted Prices')
+    plt.xlabel('Time')
+    plt.ylabel('Price')
+    plt.legend()
+    plt.savefig('predictions.png')
+    plt.close()
 
 def main():
     # Load and prepare data
     prod_weekly, net_import_weekly, supply_weekly, price = load_and_prepare_data()
-    weekly_supply, weekly_production, weekly_import, pre_release_prices, y = prepare_features(
-        prod_weekly, net_import_weekly, supply_weekly, price
+    
+    # Scale features
+    scaler = StandardScaler()
+    weekly_supply_scaled = scaler.fit_transform(supply_weekly['Actual'].values.reshape(-1, 1)).flatten()
+    weekly_production_scaled = scaler.fit_transform(prod_weekly['US Weekly Production'].values.reshape(-1, 1)).flatten()
+    weekly_import_scaled = scaler.fit_transform(net_import_weekly['Weekly Net Import'].values.reshape(-1, 1)).flatten()
+    
+    # Prepare walk-forward data
+    X, y = prepare_walk_forward_data(
+        price, 
+        weekly_supply_scaled, 
+        weekly_production_scaled, 
+        weekly_import_scaled,
+        scaler
     )
     
     # Initialize model
     model = FeatureWeightedDNN()
     
-    # Prepare input data
-    X = model.prepare_data(weekly_supply, pre_release_prices, weekly_production, weekly_import)
+    # Perform walk-forward validation
+    predictions, actuals = walk_forward_validation(X, y, model)
     
-    # Split data
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Calculate and print metrics
+    mae = mean_absolute_error(actuals, predictions)
+    print(f'Walk-Forward Validation MAE: {mae:.2f}')
     
-    # Train model
-    trained_model, history = model.train(X_train, y_train)
+    # Plot results
+    plot_predictions(predictions, actuals, scaler)
     
-    # Evaluate model
-    test_loss, test_mae = trained_model.evaluate(X_test, y_test, verbose=0)
-    print(f'Test MAE: {test_mae:.2f}')
-    
-    # Save model
-    trained_model.save('crude_oil_price_model.h5')
+    # Save the final model
+    final_model, _ = model.train(X, y)
+    final_model.save('crude_oil_price_model.h5')
 
 if __name__ == "__main__":
     main() 
