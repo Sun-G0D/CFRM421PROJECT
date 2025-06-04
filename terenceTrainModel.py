@@ -44,82 +44,41 @@ def load_and_prepare_data():
     
     return prod_weekly, net_import_weekly, supply_weekly, price
 
-def prepare_walk_forward_data(price, weekly_supply, weekly_production, weekly_import, scaler):
-    """
-    Prepare data for walk-forward validation
-    Returns sequences of 60 minutes for input and 2 minutes for output
-    """
-    # Group price data by release time
+def prepare_supervised_data(price, weekly_production, weekly_import, scaler, prod_weekly, net_import_weekly):
     grouped_prices = price.groupby('Release_Datetime')
-    
-    X_sequences = []
-    y_sequences = []
-    
-    for report_time, group in grouped_prices:
-        # Sort by date to ensure correct order
-        group = group.sort_values('Date')
-        
-        # Get the last 60 minutes before release
-        pre_release = group[group['Date'] <= report_time].tail(60)
-        
-        # Get the next 2 minutes after release
-        post_release = group[group['Date'] > report_time].head(2)
-        
-        if len(pre_release) == 60 and len(post_release) == 2:
-            # Scale the price sequences
-            pre_release_scaled = scaler.transform(pre_release['Close'].values.reshape(-1, 1)).flatten()
-            post_release_scaled = scaler.transform(post_release['Close'].values.reshape(-1, 1)).flatten()
-            
-            # Get the corresponding weekly features for this report time
-            report_date = pd.to_datetime(report_time.date())
-            supply_value = weekly_supply[supply_weekly['Release Date'] == report_date][0] if len(weekly_supply[supply_weekly['Release Date'] == report_date]) > 0 else 0
-            production_value = weekly_production[prod_weekly['ï»¿Date'] == report_date][0] if len(weekly_production[prod_weekly['ï»¿Date'] == report_date]) > 0 else 0
-            import_value = weekly_import[net_import_weekly['ï»¿Date'] == report_date][0] if len(weekly_import[net_import_weekly['ï»¿Date'] == report_date]) > 0 else 0
-            
-            # Combine price sequence with weekly features
-            X_sequence = np.concatenate([pre_release_scaled, [supply_value, production_value, import_value]])
-            
-            X_sequences.append(X_sequence)
-            y_sequences.append(post_release_scaled)
-    
-    return np.array(X_sequences), np.array(y_sequences)
+    X = []
+    y = []
 
-def walk_forward_validation(X, y, model, train_size=0.8):
-    """
-    Perform walk-forward validation
-    """
-    n_samples = len(X)
-    train_size = int(n_samples * train_size)
-    
-    # Initialize lists to store predictions and actual values
-    all_predictions = []
-    all_actuals = []
-    
-    # Train initial model on first train_size samples
-    X_train = X[:train_size]
-    y_train = y[:train_size]
-    
-    trained_model, _ = model.train(X_train, y_train)
-    
-    # Walk forward
-    for i in range(train_size, n_samples):
-        # Make prediction
-        X_test = X[i:i+1]
-        y_test = y[i:i+1]
-        
-        prediction = model.predict(trained_model, X_test)
-        
-        # Store results
-        all_predictions.append(prediction[0])
-        all_actuals.append(y_test[0])
-    
-        # Update training data and retrain model
-        X_train = np.vstack([X_train, X_test])
-        y_train = np.vstack([y_train, y_test])
-        
-        trained_model, _ = model.train(X_train, y_train)
-    
-    return np.array(all_predictions), np.array(all_actuals)
+    # Convert weekly data date columns to datetime
+    prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'])
+    net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'])
+
+    for report_time, group in grouped_prices:
+        group = group.sort_values('Datetime')
+        group_datetimes = pd.to_datetime(group['Datetime'])
+        report_time_naive = pd.to_datetime(report_time).tz_localize(None)
+
+        pre_release = group[group_datetimes <= report_time_naive].tail(60)
+        # Get the price exactly 2 minutes after release
+        post_release = group[group_datetimes > report_time_naive].head(2)
+
+        if len(pre_release) == 60 and len(post_release) == 2:
+            pre_release_scaled = scaler.transform(pre_release['Close'].values.reshape(-1, 1)).flatten()
+            # Target: price at exactly 2 minutes after release
+            target_price = post_release['Close'].values[-1]
+            target_price_scaled = scaler.transform([[target_price]])[0, 0]
+
+            # Use only the date part for matching
+            report_date = report_time_naive.date()
+            production_value = weekly_production[prod_weekly['ï»¿Date'].dt.date == report_date]
+            import_value = weekly_import[net_import_weekly['ï»¿Date'].dt.date == report_date]
+            production_value = production_value[0] if len(production_value) > 0 else 0
+            import_value = import_value[0] if len(import_value) > 0 else 0
+
+            X.append(np.concatenate([pre_release_scaled, [production_value, import_value]]))
+            y.append(target_price_scaled)
+
+    return np.array(X), np.array(y)
 
 def plot_predictions(predictions, actuals, scaler):
     """
@@ -145,35 +104,37 @@ def main():
     
     # Scale features
     scaler = StandardScaler()
-    weekly_supply_scaled = scaler.fit_transform(supply_weekly['Actual'].values.reshape(-1, 1)).flatten()
     weekly_production_scaled = scaler.fit_transform(prod_weekly['US Weekly Production'].values.reshape(-1, 1)).flatten()
     weekly_import_scaled = scaler.fit_transform(net_import_weekly['Weekly Net Import'].values.reshape(-1, 1)).flatten()
     
-    # Prepare walk-forward data
-    X, y = prepare_walk_forward_data(
+    # Prepare supervised data
+    X, y = prepare_supervised_data(
         price, 
-        weekly_supply_scaled, 
         weekly_production_scaled, 
         weekly_import_scaled,
-        scaler
+        scaler,
+        prod_weekly,
+        net_import_weekly
     )
+    
+    # Time-based 80/20 split
+    n = len(X)
+    split_idx = int(n * 0.8)
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
     
     # Initialize model
     model = FeatureWeightedDNN()
     
-    # Perform walk-forward validation
-    predictions, actuals = walk_forward_validation(X, y, model)
+    # Train model
+    trained_model, history = model.train(X_train, y_train)
     
-    # Calculate and print metrics
-    mae = mean_absolute_error(actuals, predictions)
-    print(f'Walk-Forward Validation MAE: {mae:.2f}')
+    # Evaluate model
+    test_loss, test_mae = trained_model.evaluate(X_test, y_test, verbose=0)
+    print(f'Test MAE: {test_mae:.2f}')
     
-    # Plot results
-    plot_predictions(predictions, actuals, scaler)
-    
-    # Save the final model
-    final_model, _ = model.train(X, y)
-    final_model.save('crude_oil_price_model.h5')
+    # Save model
+    trained_model.save('crude_oil_price_model.h5')
 
 if __name__ == "__main__":
     main() 
