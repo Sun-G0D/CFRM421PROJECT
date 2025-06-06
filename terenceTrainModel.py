@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from terenceModel import DNN
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import root_mean_squared_error
 import matplotlib.pyplot as plt
 
 def convert_to_number(value):
@@ -13,31 +13,19 @@ def convert_to_number(value):
 
 def load_and_prepare_data():
     # Load data
-    prod_weekly = pd.read_csv('domestic_prod.csv', encoding='latin1')
-    net_import_weekly = pd.read_csv('net_import.csv', encoding='latin1')
-    supply_weekly = pd.read_csv('InvestingcomEIA.csv', encoding='latin1')
-    price_wide = pd.read_csv('price_window_valid_wide.csv', encoding='latin1') 
+    df = pd.read_csv("full_data.csv")
+
+    feature_cols = [col for col in df.columns if 'Close_t-60'  in col or 'Close_t-40' in col or 'Close_t-20' in col or col == 'Release Date' or col == 'Actual' or col == 'Weekly Net Import' or col == 'Weekly Production' or col == 'Open_t0']
+
+    X_temp = df[feature_cols]
+    y_temp = df['Close_t2']
+
+    prod_weekly = X_temp[['Release Date', 'Weekly Production']]
+    net_import_weekly = X_temp[['Release Date', 'Weekly Net Import']]
+    supply_weekly = X_temp[['Release Date', 'Actual']]
+    price_wide = X_temp[['Release Date', 'Close_t-60', 'Close_t-40', 'Close_t-20', 'Open_t0']]
     
-    # Converting dates
-    prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'], format='%b %d, %Y')
-    net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'], format='%b %d, %Y')
-    supply_weekly['Release Date'] = pd.to_datetime(supply_weekly['Release Date'], format='%d-%b-%y')
-    price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime']).dt.tz_localize(None)
-    
-    # Convert M to one million
-    supply_weekly['Actual'] = supply_weekly['Actual'].apply(convert_to_number)
-    supply_weekly['Forecast'] = supply_weekly['Forecast'].apply(convert_to_number)
-    supply_weekly['Previous'] = supply_weekly['Previous'].apply(convert_to_number)
-    
-    # Filter date range for weekly data and price_wide data
-    start_date = pd.to_datetime('2012-01-01')
-    end_date = pd.to_datetime('2025-01-01')
-    prod_weekly = prod_weekly[(prod_weekly['ï»¿Date'] >= start_date) & (prod_weekly['ï»¿Date'] < end_date)]
-    net_import_weekly = net_import_weekly[(net_import_weekly['ï»¿Date'] >= start_date) & (net_import_weekly['ï»¿Date'] < end_date)]
-    supply_weekly = supply_weekly[(supply_weekly['Release Date'] >= start_date) & (supply_weekly['Release Date'] < end_date)]
-    price_wide = price_wide[(price_wide['Release_Datetime'] >= start_date) & (price_wide['Release_Datetime'] < end_date)]
-    
-    return prod_weekly, net_import_weekly, supply_weekly, price_wide
+    return prod_weekly, net_import_weekly, supply_weekly, price_wide, y_temp
 
 def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, weekly_supply, scaler, target_scaler, prod_weekly, net_import_weekly, supply_weekly):
     X = []
@@ -85,8 +73,8 @@ def plot_predictions(predictions, actuals, scaler, save_path='terenceActualVSPre
     actuals_unscaled = scaler.inverse_transform(actuals.reshape(-1, 1)).flatten()
 
     # Calculate MAE on unscaled data
-    mae = mean_absolute_error(actuals_unscaled, predictions_unscaled)
-    print(f"Test MAE (unscaled): {mae:.2f}")
+    rmse = root_mean_squared_error(actuals_unscaled, predictions_unscaled)
+    print(f"Test RMSE (unscaled): {rmse:.2f}")
 
     plt.figure(figsize=(12, 6))
     plt.plot(actuals_unscaled, label='Actual Price (2 min after release)')
@@ -99,79 +87,71 @@ def plot_predictions(predictions, actuals, scaler, save_path='terenceActualVSPre
     plt.show()
 
 def main():
-    prod_weekly, net_import_weekly, supply_weekly, price_wide = load_and_prepare_data()
-    
-    # For features (X): all Close prices used for features
-    all_feature_prices = []
-    all_target_prices = []
-    for idx, row in price_wide.iterrows():
-        all_feature_prices.extend([row['Close_t-60'], row['Close_t-40'], row['Close_t-20'], row['Close_t0']])
-        all_target_prices.append(row['Close_t2'])
-    all_feature_prices = np.array(all_feature_prices)
-    all_target_prices = np.array(all_target_prices)
+    prod_weekly, net_import_weekly, supply_weekly, price_wide, y_temp = load_and_prepare_data()
+
 
     price_scaler = StandardScaler()
-
     target_scaler = StandardScaler()
 
-    # Fit feature scaler on all price data used for features
-    price_scaler.fit(all_feature_prices.reshape(-1, 1))
-    # Fit target scaler on all target prices
-    target_scaler.fit(all_target_prices.reshape(-1, 1))
+    price_features = price_wide[['Close_t-60', 'Close_t-40', 'Close_t-20', 'Open_t0']]
 
+    # Scale the price features in the dataframe
+    for col in ['Close_t-60', 'Close_t-40', 'Close_t-20', 'Open_t0']:
+        price_features[col] = price_scaler.fit_transform(price_wide[col].values.reshape(-1, 1)).flatten()
 
-    # Scale weekly features
-    weekly_features = np.concatenate([
-        prod_weekly['US Weekly Production'].values,
-        net_import_weekly['Weekly Net Import'].values,
-        supply_weekly['Actual'].values
-    ]).reshape(-1, 1)
+    # Scale the target values in the dataframe
+    y_temp = target_scaler.fit_transform(y_temp.values.reshape(-1, 1)).flatten()
 
     #Scaler for weekly data
     weekly_scaler = StandardScaler()
 
-    weekly_scaler.fit(weekly_features)
-    
-    weekly_production_scaled = weekly_scaler.transform(prod_weekly['US Weekly Production'].values.reshape(-1, 1)).flatten()
-    weekly_import_scaled = weekly_scaler.transform(net_import_weekly['Weekly Net Import'].values.reshape(-1, 1)).flatten()
-    weekly_supply_scaled = weekly_scaler.transform(supply_weekly['Actual'].values.reshape(-1, 1)).flatten()
-    
-    # Prepare supervised data
-    X, y = prepare_supervised_data_wide(
-        price_wide, 
-        weekly_production_scaled, 
-        weekly_import_scaled,
-        weekly_supply_scaled,
-        price_scaler,
-        target_scaler,
-        prod_weekly,
-        net_import_weekly,
-        supply_weekly
-    )
+    weekly_production_scaled = weekly_scaler.fit_transform(prod_weekly['Weekly Production'].values.reshape(-1, 1)).flatten()
+    weekly_import_scaled = weekly_scaler.fit_transform(net_import_weekly['Weekly Net Import'].values.reshape(-1, 1)).flatten()
+    weekly_supply_scaled = weekly_scaler.fit_transform(supply_weekly['Actual'].values.reshape(-1, 1)).flatten()
+
+    X = []
+    y = []
+
+    for idx, _ in price_features.iterrows():
+        # Target: price of future 2 minutes after release (already scaled)
+        target_price = y_temp[idx]
+
+        
+        production_value = weekly_production_scaled[idx]
+        import_value = weekly_import_scaled[idx]
+        supply_value = weekly_supply_scaled[idx]
+        production_value = production_value
+        import_value = import_value
+        supply_value = supply_value
+
+        row_data = [price_features['Close_t-60'].values[idx],price_features['Close_t-40'].values[idx],price_features['Close_t-20'].values[idx],price_features['Open_t0'].values[idx],production_value,import_value,supply_value]
+        X.append(row_data)
+        y.append(target_price)
+
+    X = np.array(X)
+    y = np.array(y)
+
     # Time-based 80/20 split
     n = len(X)
     split_idx = int(n * 0.8)
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
- 
-    # Initialize model
+
     model = DNN()
-    
+        
     # Train model
     trained_model, _ = model.train(X_train, y_train)
-    
+
     # Evaluate model
-    test_loss, test_mae = trained_model.evaluate(X_test, y_test, verbose=0)
+    test_loss, test_rmse = trained_model.evaluate(X_test, y_test, verbose=0)
     print(f"Test Loss: {test_loss:.2f}")
-    print(f'Test MAE: {test_mae:.2f}')
-    
+    print(f'Test RMSE: {test_rmse:.2f}')
+
     # Predict on test set
     y_pred = trained_model.predict(X_test).flatten()
 
     # Plot and print MAE (unscaled)
     plot_predictions(y_pred, y_test, target_scaler)
-
-    trained_model.save('crude_oil_price_model.h5')
 
     
 if __name__ == "__main__":
