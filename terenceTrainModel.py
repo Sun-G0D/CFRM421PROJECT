@@ -20,18 +20,13 @@ def load_and_prepare_data():
     
     
     # Convert dates
-    prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'], format='%b %d, %Y', errors='coerce')
-    net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'], format='%b %d, %Y', errors='coerce')
-    supply_weekly['Release Date'] = pd.to_datetime(supply_weekly['Release Date'], format='%d-%b-%y', errors='coerce')
-    price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime'], errors='coerce')
+    prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'], format='%b %d, %Y')
+    net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'], format='%b %d, %Y')
+    supply_weekly['Release Date'] = pd.to_datetime(supply_weekly['Release Date'], format='%d-%b-%y')
+    price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime']).dt.tz_localize(None)
     
-    # Get timezone from price_wide's Release_Datetime
-    tz = price_wide['Release_Datetime'].dt.tz
-    
-    # Convert naive timestamps to match price_wide's timezone
-    prod_weekly['ï»¿Date'] = prod_weekly['ï»¿Date'].dt.tz_localize(tz)
-    net_import_weekly['ï»¿Date'] = net_import_weekly['ï»¿Date'].dt.tz_localize(tz)
-    supply_weekly['Release Date'] = supply_weekly['Release Date'].dt.tz_localize(tz)
+    # Remove timezone handling for date-only columns
+    # (No tz_localize for prod_weekly, net_import_weekly, supply_weekly)
     
     # Convert supply values from strings with M suffix to numbers
     supply_weekly['Actual'] = supply_weekly['Actual'].apply(convert_to_number)
@@ -39,8 +34,8 @@ def load_and_prepare_data():
     supply_weekly['Previous'] = supply_weekly['Previous'].apply(convert_to_number)
     
     # Filter date range for weekly data and price_wide
-    start_date = pd.to_datetime('2012-01-01').tz_localize(tz)
-    end_date = pd.to_datetime('2025-01-01').tz_localize(tz)
+    start_date = pd.to_datetime('2012-01-01')
+    end_date = pd.to_datetime('2025-01-01')
     prod_weekly = prod_weekly[(prod_weekly['ï»¿Date'] >= start_date) & (prod_weekly['ï»¿Date'] < end_date)]
     net_import_weekly = net_import_weekly[(net_import_weekly['ï»¿Date'] >= start_date) & (net_import_weekly['ï»¿Date'] < end_date)]
     supply_weekly = supply_weekly[(supply_weekly['Release Date'] >= start_date) & (supply_weekly['Release Date'] < end_date)]
