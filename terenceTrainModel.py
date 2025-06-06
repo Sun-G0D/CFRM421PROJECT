@@ -16,24 +16,20 @@ def load_and_prepare_data():
     prod_weekly = pd.read_csv('domestic_prod.csv', encoding='latin1')
     net_import_weekly = pd.read_csv('net_import.csv', encoding='latin1')
     supply_weekly = pd.read_csv('InvestingcomEIA.csv', encoding='latin1')
-    price_wide = pd.read_csv('price_window_valid_wide.csv', encoding='latin1')
+    price_wide = pd.read_csv('price_window_valid_wide.csv', encoding='latin1') 
     
-    
-    # Convert dates
+    # Converting dates
     prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'], format='%b %d, %Y')
     net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'], format='%b %d, %Y')
     supply_weekly['Release Date'] = pd.to_datetime(supply_weekly['Release Date'], format='%d-%b-%y')
     price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime']).dt.tz_localize(None)
     
-    # Remove timezone handling for date-only columns
-    # (No tz_localize for prod_weekly, net_import_weekly, supply_weekly)
-    
-    # Convert supply values from strings with M suffix to numbers
+    # Convert M to one million
     supply_weekly['Actual'] = supply_weekly['Actual'].apply(convert_to_number)
     supply_weekly['Forecast'] = supply_weekly['Forecast'].apply(convert_to_number)
     supply_weekly['Previous'] = supply_weekly['Previous'].apply(convert_to_number)
     
-    # Filter date range for weekly data and price_wide
+    # Filter date range for weekly data and price_wide data
     start_date = pd.to_datetime('2012-01-01')
     end_date = pd.to_datetime('2025-01-01')
     prod_weekly = prod_weekly[(prod_weekly['ï»¿Date'] >= start_date) & (prod_weekly['ï»¿Date'] < end_date)]
@@ -54,7 +50,7 @@ def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, w
     price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime'])
 
     for idx, row in price_wide.iterrows():
-        # Extract price features
+        # Use 4 price features: 60, 40, 20, 0 minutes before release
         price_features = [
             row['Close_t-60'],
             row['Close_t-40'],
@@ -63,7 +59,7 @@ def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, w
         ]
         price_features_scaled = scaler.transform(np.array(price_features).reshape(-1, 1)).flatten()
 
-        # Target: price 2 minutes after release
+        # Target: price of future 2 minutes after release
         target_price = row['Close_t2']
         target_price_scaled = target_scaler.transform([[target_price]])[0, 0]
 
@@ -80,19 +76,18 @@ def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, w
         y.append(target_price_scaled)
     return np.array(X), np.array(y)
 
-def plot_predictions(predictions, actuals, scaler, save_path='actual_vs_predicted_2min.png'):
+def plot_predictions(predictions, actuals, scaler, save_path='terenceActualVSPredicted.png'):
     """
     Plot predictions vs actual values (unscaled) and print MAE.
     """
-    # Inverse transform only the predictions
+    # Inverse transform the predictions and actuals (We want to see the raw price comparison between actual and predicted from DNN)
     predictions_unscaled = scaler.inverse_transform(predictions.reshape(-1, 1)).flatten()
-    actuals_unscaled = scaler.inverse_transform(actuals.reshape(-1, 1)).flatten()  # Already in original scale
+    actuals_unscaled = scaler.inverse_transform(actuals.reshape(-1, 1)).flatten()
 
     # Calculate MAE on unscaled data
     mae = mean_absolute_error(actuals_unscaled, predictions_unscaled)
     print(f"Test MAE (unscaled): {mae:.2f}")
 
-    # Plot
     plt.figure(figsize=(12, 6))
     plt.plot(actuals_unscaled, label='Actual Price (2 min after release)')
     plt.plot(predictions_unscaled, label='Predicted Price (2 min after release)')
@@ -104,7 +99,6 @@ def plot_predictions(predictions, actuals, scaler, save_path='actual_vs_predicte
     plt.show()
 
 def main():
-    # Load and prepare data
     prod_weekly, net_import_weekly, supply_weekly, price_wide = load_and_prepare_data()
     
     # For features (X): all Close prices used for features
@@ -116,15 +110,15 @@ def main():
     all_feature_prices = np.array(all_feature_prices)
     all_target_prices = np.array(all_target_prices)
 
-    # For features (X)
-    feature_scaler = StandardScaler()
-    # For target (y)
+    price_scaler = StandardScaler()
+
     target_scaler = StandardScaler()
 
     # Fit feature scaler on all price data used for features
-    feature_scaler.fit(all_feature_prices.reshape(-1, 1))
+    price_scaler.fit(all_feature_prices.reshape(-1, 1))
     # Fit target scaler on all target prices
     target_scaler.fit(all_target_prices.reshape(-1, 1))
+
 
     # Scale weekly features
     weekly_features = np.concatenate([
@@ -132,7 +126,10 @@ def main():
         net_import_weekly['Weekly Net Import'].values,
         supply_weekly['Actual'].values
     ]).reshape(-1, 1)
+
+    #Scaler for weekly data
     weekly_scaler = StandardScaler()
+
     weekly_scaler.fit(weekly_features)
     
     weekly_production_scaled = weekly_scaler.transform(prod_weekly['US Weekly Production'].values.reshape(-1, 1)).flatten()
@@ -145,7 +142,7 @@ def main():
         weekly_production_scaled, 
         weekly_import_scaled,
         weekly_supply_scaled,
-        feature_scaler,
+        price_scaler,
         target_scaler,
         prod_weekly,
         net_import_weekly,
