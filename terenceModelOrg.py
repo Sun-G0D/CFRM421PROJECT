@@ -21,22 +21,21 @@ class RMSE(tf.keras.metrics.Metric):
         self.mse.reset_state()
 
 class DNN:
-    def __init__(self, learning_rate=0.000244):  # Updated best learning rate
+    def __init__(self, learning_rate=0.01):
         self.learning_rate = learning_rate
         self.model = None
+        self.build_model()
 
-    def build_model(self, input_shape=(7,)):
+    def build_model(self):
         """
         Build the DNN model with the best hyperparameters found from tuning
-        Best configuration:
-        - 2 layers: [64 units, 0.3 dropout], [32 units, 0.0 dropout]
-        - Learning rate: 0.000244
         """
         model = Sequential([
-            Dense(64, activation='relu', input_shape=input_shape),  # Layer 1
-            Dropout(0.3),
-            Dense(32, activation='relu'),  # Layer 2
-            Dropout(0.0),
+            # First layer (best configuration from tuning)
+            Dense(128, activation='relu', input_shape=(7,)),  # Best units: 128
+            Dropout(0.0),  # Best dropout: 0.0
+            
+            # Output layer
             Dense(1)
         ])
         
@@ -61,7 +60,7 @@ class DNN:
         y: target values (single value)
         """
         if self.model is None:
-            self.model = self.build_model(input_shape=(X.shape[1],))
+            self.model = self.build_model()
         
         # Early stopping callback
         early_stopping = EarlyStopping(monitor='val_loss',

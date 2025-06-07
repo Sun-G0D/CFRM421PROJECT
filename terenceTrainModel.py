@@ -18,7 +18,7 @@ def load_and_prepare_data():
     feature_cols = [col for col in df.columns if 'Close_t-60'  in col or 'Close_t-40' in col or 'Close_t-20' in col or col == 'Release Date' or col == 'Actual' or col == 'Weekly Net Import' or col == 'Weekly Production' or col == 'Open_t0']
 
     X_temp = df[feature_cols]
-    y_temp = df['Close_t2']
+    y_temp = (df['Close_t2'] - df['Close_t0'])/df['Close_t0']
 
     prod_weekly = X_temp[['Release Date', 'Weekly Production']]
     net_import_weekly = X_temp[['Release Date', 'Weekly Net Import']]
@@ -64,24 +64,17 @@ def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, w
         y.append(target_price_scaled)
     return np.array(X), np.array(y)
 
-def plot_predictions(predictions, actuals, scaler, save_path='terenceActualVSPredicted.png'):
-    """
-    Plot predictions vs actual values (unscaled) and print MAE.
-    """
-    # Inverse transform the predictions and actuals (We want to see the raw price comparison between actual and predicted from DNN)
-    predictions_unscaled = scaler.inverse_transform(predictions.reshape(-1, 1)).flatten()
-    actuals_unscaled = scaler.inverse_transform(actuals.reshape(-1, 1)).flatten()
-
-    # Calculate MAE on unscaled data
-    rmse = root_mean_squared_error(actuals_unscaled, predictions_unscaled)
-    print(f"Test RMSE (unscaled): {rmse:.2f}")
+def plot_predictions(predictions, actuals, save_path='terenceActualVSPredicted.png'):
+    # No inverse transform needed
+    rmse = root_mean_squared_error(actuals, predictions)
+    print(f"Test RMSE: {rmse:.4f}")
 
     plt.figure(figsize=(12, 6))
-    plt.plot(actuals_unscaled, label='Actual Price (2 min after release)')
-    plt.plot(predictions_unscaled, label='Predicted Price (2 min after release)')
-    plt.title('Actual vs Predicted Price 2 Minutes After Release')
+    plt.plot(actuals, label='Actual % Change')
+    plt.plot(predictions, label='Predicted % Change')
+    plt.title('Actual vs Predicted Percentage Change 2 Minutes After Release')
     plt.xlabel('Test Sample')
-    plt.ylabel('Price')
+    plt.ylabel('Percentage Change')
     plt.legend()
     plt.savefig(save_path)
     plt.show()
@@ -143,7 +136,7 @@ def main():
     trained_model, _ = model.train(X_train, y_train)
 
     # Evaluate model
-    test_loss, test_rmse = trained_model.evaluate(X_test, y_test, verbose=0)
+    test_loss, test_rmse = trained_model.evaluate(X_test, y_test, verbose=1)
     print(f"Test Loss: {test_loss:.2f}")
     print(f'Test RMSE: {test_rmse:.2f}')
 
@@ -151,7 +144,7 @@ def main():
     y_pred = trained_model.predict(X_test).flatten()
 
     # Plot and print MAE (unscaled)
-    plot_predictions(y_pred, y_test, target_scaler)
+    plot_predictions(y_pred, y_test)
 
     
 if __name__ == "__main__":
