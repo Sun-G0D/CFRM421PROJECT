@@ -112,7 +112,6 @@ def main():
     else:
         print("Model does NOT outperform baseline (predicting zero change). Further investigation or model refinement needed.")
 
-    # Plot and print MAE (unscaled)
     plot_predictions(y_pred, y_test)
 
     
