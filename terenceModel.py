@@ -90,17 +90,3 @@ class DNN:
             self.model.save(filepath)
         else:
             raise ValueError("No model to save. Train the model first.")
-
-    def prepare_data(self, price_features, weekly_production, weekly_import, weekly_supply):
-        """
-        Prepare input data with proper feature ordering
-        price_features: array of shape (n_samples, 4) containing selected price features
-        weekly_production, weekly_import, weekly_supply: arrays of shape (n_samples,)
-        """
-        weekly_features = np.column_stack([
-            weekly_production,
-            weekly_import,
-            weekly_supply
-        ])
-        X = np.column_stack([price_features, weekly_features])
-        return X 
