@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from terenceModel import DNN
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import root_mean_squared_error
+from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
 
 def convert_to_number(value):
@@ -27,46 +27,8 @@ def load_and_prepare_data():
     
     return prod_weekly, net_import_weekly, supply_weekly, price_wide, y_temp
 
-def prepare_supervised_data_wide(price_wide, weekly_production, weekly_import, weekly_supply, scaler, target_scaler, prod_weekly, net_import_weekly, supply_weekly):
-    X = []
-    y = []
-
-    # Convert weekly data date columns to datetime
-    prod_weekly['ï»¿Date'] = pd.to_datetime(prod_weekly['ï»¿Date'])
-    net_import_weekly['ï»¿Date'] = pd.to_datetime(net_import_weekly['ï»¿Date'])
-    supply_weekly['Release Date'] = pd.to_datetime(supply_weekly['Release Date'])
-    price_wide['Release_Datetime'] = pd.to_datetime(price_wide['Release_Datetime'])
-
-    for idx, row in price_wide.iterrows():
-        # Use 4 price features: 60, 40, 20, 0 minutes before release
-        price_features = [
-            row['Close_t-60'],
-            row['Close_t-40'],
-            row['Close_t-20'],
-            row['Close_t0']
-        ]
-        price_features_scaled = scaler.transform(np.array(price_features).reshape(-1, 1)).flatten()
-
-        # Target: price of future 2 minutes after release
-        target_price = row['Close_t2']
-        target_price_scaled = target_scaler.transform([[target_price]])[0, 0]
-
-        # Match weekly features by date
-        report_date = row['Release_Datetime'].date()
-        production_value = weekly_production[prod_weekly['ï»¿Date'].dt.date == report_date]
-        import_value = weekly_import[net_import_weekly['ï»¿Date'].dt.date == report_date]
-        supply_value = weekly_supply[supply_weekly['Release Date'].dt.date == report_date]
-        production_value = production_value[0] if len(production_value) > 0 else 0
-        import_value = import_value[0] if len(import_value) > 0 else 0
-        supply_value = supply_value[0] if len(supply_value) > 0 else 0
-
-        X.append(np.concatenate([price_features_scaled, [production_value, import_value, supply_value]]))
-        y.append(target_price_scaled)
-    return np.array(X), np.array(y)
-
 def plot_predictions(predictions, actuals, save_path='terenceActualVSPredicted.png'):
-    # No inverse transform needed
-    rmse = root_mean_squared_error(actuals, predictions)
+    rmse = np.sqrt(mean_squared_error(actuals, predictions))
     print(f"Test RMSE: {rmse:.4f}")
 
     plt.figure(figsize=(12, 6))
@@ -81,7 +43,6 @@ def plot_predictions(predictions, actuals, save_path='terenceActualVSPredicted.p
 
 def main():
     prod_weekly, net_import_weekly, supply_weekly, price_wide, y_temp = load_and_prepare_data()
-
 
     price_scaler = StandardScaler()
     target_scaler = StandardScaler()
@@ -108,15 +69,9 @@ def main():
     for idx, _ in price_features.iterrows():
         # Target: price of future 2 minutes after release (already scaled)
         target_price = y_temp[idx]
-
-        
         production_value = weekly_production_scaled[idx]
         import_value = weekly_import_scaled[idx]
         supply_value = weekly_supply_scaled[idx]
-        production_value = production_value
-        import_value = import_value
-        supply_value = supply_value
-
         row_data = [price_features['Close_t-60'].values[idx],price_features['Close_t-40'].values[idx],price_features['Close_t-20'].values[idx],price_features['Open_t0'].values[idx],production_value,import_value,supply_value]
         X.append(row_data)
         y.append(target_price)
@@ -130,18 +85,32 @@ def main():
     X_train, X_test = X[:split_idx], X[split_idx:]
     y_train, y_test = y[:split_idx], y[split_idx:]
 
-    model = DNN()
-        
-    # Train model
-    trained_model, _ = model.train(X_train, y_train)
+    # Compute sample weights for training and test sets
+    epsilon = 1e-6
+    sample_weights_train = np.abs(y_train) + epsilon
+    sample_weights_test = np.abs(y_test) + epsilon
 
-    # Evaluate model
-    test_loss, test_rmse = trained_model.evaluate(X_test, y_test, verbose=1)
-    print(f"Test Loss: {test_loss:.2f}")
-    print(f'Test RMSE: {test_rmse:.2f}')
+    model = DNN()
+    
+    # Train model with sample weights
+    trained_model, _ = model.train(X_train, y_train, sample_weight=sample_weights_train)
 
     # Predict on test set
     y_pred = trained_model.predict(X_test).flatten()
+
+    # Weighted RMSE for test set
+    weighted_test_rmse = np.sqrt(mean_squared_error(y_test, y_pred, sample_weight=sample_weights_test))
+    print(f"Weighted Test RMSE: {weighted_test_rmse:.4f}")
+
+    # Baseline: predict zero change
+    baseline_pred_zero = np.zeros_like(y_test)
+    baseline_rmse_zero = np.sqrt(mean_squared_error(y_test, baseline_pred_zero, sample_weight=sample_weights_test))
+    print(f"Baseline (Zero Prediction) Weighted RMSE: {baseline_rmse_zero:.4f}")
+
+    if weighted_test_rmse < baseline_rmse_zero:
+        print("Model outperforms baseline (predicting zero change).")
+    else:
+        print("Model does NOT outperform baseline (predicting zero change). Further investigation or model refinement needed.")
 
     # Plot and print MAE (unscaled)
     plot_predictions(y_pred, y_test)

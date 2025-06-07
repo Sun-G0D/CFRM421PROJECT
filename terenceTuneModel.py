@@ -57,7 +57,7 @@ class DNNHyperModel(kt.HyperModel):
         np.random.seed(seed)
         tf.keras.backend.clear_session()
 
-def tune_model(X_train, y_train, X_val, y_val, max_trials=150, epochs=100):
+def tune_model(X_train, y_train, X_val, y_val, max_trials=200, epochs=100):
     """
     Tune hyperparameters for the DNN model
     
@@ -69,6 +69,11 @@ def tune_model(X_train, y_train, X_val, y_val, max_trials=150, epochs=100):
     epochs : maximum number of epochs for each trial
     """
     
+    # Compute sample weights for training and validation
+    epsilon = 1e-6
+    sample_weights_train = np.abs(y_train) + epsilon
+    sample_weights_val = np.abs(y_val) + epsilon
+
     # Create the hypermodel
     hypermodel = DNNHyperModel(input_shape=(X_train.shape[1],))
     
@@ -76,7 +81,7 @@ def tune_model(X_train, y_train, X_val, y_val, max_trials=150, epochs=100):
     # Define the tuner
     tuner = kt.BayesianOptimization(
         hypermodel,
-        objective='val_loss',
+        objective=kt.Objective("val_rmse", direction="min"),
         max_trials=max_trials,
         directory='tuner_results',
         project_name='dnn_tuning'
@@ -84,19 +89,21 @@ def tune_model(X_train, y_train, X_val, y_val, max_trials=150, epochs=100):
     
     # Define early stopping
     early_stopping = tf.keras.callbacks.EarlyStopping(
-        monitor='val_loss',
+        monitor='val_rmse',
         patience=10,
-        restore_best_weights=True
+        restore_best_weights=True,
+        mode='min'
     )
     
     # Start the search
     print("Starting hyperparameter search...")
     tuner.search(
         X_train, y_train,
-        validation_data=(X_val, y_val),
+        sample_weight=sample_weights_train,
+        validation_data=(X_val, y_val, sample_weights_val),
         epochs=epochs,
         callbacks=[early_stopping],
-        verbose=0
+        verbose=1
     )
     
     # Get the best hyperparameters
@@ -112,7 +119,7 @@ def tune_model(X_train, y_train, X_val, y_val, max_trials=150, epochs=100):
         print(f"  Units: {best_hps.get(f'units_{i+1}')}")
         print(f"  Dropout: {best_hps.get(f'dropout_{i+1}'):.2f}")
     
-    print(f"\nBest Validation Loss: {best_trial.score:.6f}")
+    print(f"\nBest Validation Weighted RMSE: {best_trial.score:.6f}")
     
     # Build the best model
     best_model = tuner.hypermodel.build(best_hps)
