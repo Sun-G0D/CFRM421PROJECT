@@ -4,6 +4,7 @@ from terenceModel import DNN
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
 import matplotlib.pyplot as plt
+import tensorflow as tf
 
 def convert_to_number(value):
     """Convert string with M suffix to float"""
@@ -39,6 +40,41 @@ def plot_predictions(predictions, actuals, save_path='terenceActualVSPredicted.p
     plt.ylabel('Percentage Change')
     plt.legend()
     plt.savefig(save_path)
+    plt.show()
+
+def compute_feature_importance(model, X_test):
+    """
+    Compute feature importance using gradients.
+    Returns the average absolute gradient for each feature.
+    """
+    # Convert to tensor
+    X_test_tensor = tf.convert_to_tensor(X_test, dtype=tf.float32)
+    
+    # Enable gradient computation
+    with tf.GradientTape() as tape:
+        tape.watch(X_test_tensor)
+        predictions = model(X_test_tensor)
+    
+    # Compute gradients
+    gradients = tape.gradient(predictions, X_test_tensor)
+    
+    # Take absolute value and average across samples
+    feature_importance = tf.reduce_mean(tf.abs(gradients), axis=0)
+    
+    return feature_importance.numpy()
+
+def plot_feature_importance(feature_importance, feature_names):
+    """
+    Plot feature importance as a bar chart.
+    """
+    plt.figure(figsize=(10, 6))
+    plt.bar(feature_names, feature_importance)
+    plt.xticks(rotation=45, ha='right')
+    plt.title('Feature Importance Based on Gradients')
+    plt.xlabel('Features')
+    plt.ylabel('Average Absolute Gradient')
+    plt.tight_layout()
+    plt.savefig('feature_importance.png')
     plt.show()
 
 def main():
@@ -98,9 +134,22 @@ def main():
     # Predict on test set
     y_pred = trained_model.predict(X_test).flatten()
 
+    # Compute feature importance
+    feature_names = ['Close_t-60', 'Close_t-40', 'Close_t-20', 'Open_t0', 
+                    'Weekly Production', 'Weekly Net Import', 'Actual']
+    feature_importance = compute_feature_importance(trained_model, X_test)
+    
+    # Print feature importance
+    print("\nFeature Importance (based on gradients):")
+    for name, importance in zip(feature_names, feature_importance):
+        print(f"{name}: {importance:.6f}")
+    
+    # Plot feature importance
+    plot_feature_importance(feature_importance, feature_names)
+
     # Weighted RMSE for test set
     weighted_test_rmse = np.sqrt(mean_squared_error(y_test, y_pred, sample_weight=sample_weights_test))
-    print(f"Weighted Test RMSE: {weighted_test_rmse:.4f}")
+    print(f"\nWeighted Test RMSE: {weighted_test_rmse:.4f}")
 
     # Baseline: predict zero change
     baseline_pred_zero = np.zeros_like(y_test)
